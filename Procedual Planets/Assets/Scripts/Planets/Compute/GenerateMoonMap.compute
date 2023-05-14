@@ -1,0 +1,120 @@
+#pragma kernel CSMain
+
+RWTexture3D<float> moonMap;
+RWTexture3D<float> noiseMap;
+
+float radius;
+int textureSize;
+uint _seed;
+
+int numCraters;
+float maxCraterRadius;
+float maxCraterDepth;
+float bias;
+float noiseMultiplier;
+
+uint hash(uint s)
+{
+    s ^= 2747636419u;
+    s *= 2654435769u;
+    s ^= s >> 16;
+    s *= 2654435769u;
+    s ^= s >> 16;
+    s *= 2654435769u;
+    return s;
+}
+
+float random(uint seed)
+{
+    return float(hash(seed)) / 4294967295.0;
+}
+
+float rand(uint seed)
+{
+    float r1 = random(seed);
+    seed += 1;
+    float r2 = random(seed);
+    return frac(sin(dot(float2(r1, r2), float2(12.9898, 78.233))) * 43758.5453123);
+}
+
+float biasRandom(uint seed) {
+    float x = rand(seed);
+    float k = (1 - bias) * (1 - bias) * (1 - bias);
+    return (x * k) / (x * k - x + 1);
+}
+
+float getMoonShape(float3 pos) {
+    float3 worldPos = (pos / (textureSize - 1.0f) - 0.5f) * radius * 2 * 2;
+    return length(worldPos) - radius;
+}
+
+float2 raySphereIntersect(float3 center, float radius, float3 rayOrigin, float3 rayDir) {
+    float diff = rayOrigin - center;
+    float a = dot(rayDir, rayDir);
+    float b = 2.0 * dot(rayDir, diff);
+    float c = dot(diff, diff) - radius * radius;
+    float discriminant = b * b - 4.0 * a * c;
+    float epsilon = 0.0001;
+
+    if (discriminant > epsilon) {
+        float distToSphereFar = (-b + sqrt(discriminant)) / (2.0 * a);
+        float distToSphereNear = (-b - sqrt(discriminant)) / (2.0 * a);
+
+        if (distToSphereFar >= epsilon) {
+            return float2(distToSphereNear, distToSphereFar);
+        }
+    }
+
+    return float2(0, 0);
+}
+
+float getCraters(float3 pos) {
+    float craterVal = 0.0;
+    uint seed = _seed;
+    for (int i = 0; i < numCraters; ++i) {
+        float cx = rand(seed) - 0.5;
+        seed += 2;
+        float cy = rand(seed) - 0.5;
+        seed += 2;
+        float cz = rand(seed) - 0.5;
+        seed += 2;
+        float craterRadius = biasRandom(seed) % maxCraterRadius;
+        float3 craterCenter = normalize(float3(cx, cy, cz)) * radius;
+        seed += 1;
+        float craterDepth = biasRandom(seed) % maxCraterDepth;
+
+        float3 worldPos = (pos / (textureSize - 1.0f) - 0.5f) * radius * 2 * 2;
+        float distToCrater = length(worldPos) - craterRadius;
+        float distToMoon = length(worldPos) - radius + craterVal;
+
+        float pt = (worldPos.x - craterCenter.x) * (worldPos.x - craterCenter.x) + (worldPos.y - craterCenter.y) * (worldPos.y - craterCenter.y) + (worldPos.z - craterCenter.z) * (worldPos.z - craterCenter.z);
+
+        if (pt <= craterRadius * craterRadius && distToMoon <= 0.0) {
+
+            float3 rayDir = normalize(-1 * craterCenter);
+            float3 rayOrigin = worldPos;
+
+            float distToBottom = -raySphereIntersect(craterCenter, craterRadius, rayOrigin, rayDir).x;
+
+            if (craterDepth < distToBottom) {
+                craterVal += craterDepth;
+            }
+            else {
+                craterVal += distToBottom;
+            }
+        }
+
+        seed += 1;
+    }
+
+    return craterVal;
+}
+
+[numthreads(8,8,8)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    float moonVal = getMoonShape(id);
+    float craterVal = getCraters(id);
+
+    moonMap[id] = moonVal + craterVal + noiseMap[id] * noiseMultiplier;
+}

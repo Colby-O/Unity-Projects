@@ -1,0 +1,3 @@
+TODO: Create my own normal maps with Filter Forge or noise 
+
+WaterNormal.jpg - src : https://www.cadhatch.com/seamless-water-textures?pgid=kw6kmspc-bee2af07-0290-4f7f-90b0-38256a6b71bb

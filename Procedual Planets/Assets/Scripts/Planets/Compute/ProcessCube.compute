@@ -1,0 +1,139 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+#include "./includes/MarchingCubeTable.compute"
+
+struct Vertex {
+    float3 pos;
+    float3 normal;
+    int2 id;
+};
+
+struct Triangle {
+    Vertex vA;
+    Vertex vB;
+    Vertex vC;
+};
+
+AppendStructuredBuffer<Triangle> triangles;
+RWTexture3D<float> densityTexture;
+int textureSize;
+
+float planetRadius;
+int numPointsPerAxis;
+float isoLevel;
+
+float smapleDensity(int3 coord) {
+    coord = max(0, min(coord, textureSize));
+    return densityTexture[coord];
+}
+
+float3 coordToWorld(int3 pt) {
+    return (pt / (textureSize - 1.0f) - 0.5f) * planetRadius;
+}
+
+float3 getNormal(int3 coord) {
+    float dx = smapleDensity(coord + int3(1, 0, 0)) - smapleDensity(coord - int3(1, 0, 0));
+    float dy = smapleDensity(coord + int3(0, 1, 0)) - smapleDensity(coord - int3(0, 1, 0));
+    float dz = smapleDensity(coord + int3(0, 0, 1)) - smapleDensity(coord - int3(0, 0, 1));
+
+    return normalize(float3(dx, dy, dz));
+}
+
+int indexFromCoord(int3 coord) {
+    return coord.z * numPointsPerAxis * numPointsPerAxis + coord.y * numPointsPerAxis + coord.x;
+}
+
+Vertex createVertex(int3 a, int3 b) {
+    float3 posA = coordToWorld(a);
+    float3 posB = coordToWorld(b);
+    float denA = smapleDensity(a);
+    float denB = smapleDensity(b);
+
+    // interpolate the two corner points
+    float t = (isoLevel - denA) / (denB - denA);
+    float3 pos = posA + t * (posB - posA);
+
+    // Gets the normal
+    float3 normalA = getNormal(a);
+    float3 normalB = getNormal(b);
+    float3 normal = normalize(normalA + t * (normalB - normalA));
+
+    // Get the id's
+    int indexA = indexFromCoord(a);
+    int indexB = indexFromCoord(b);
+
+    // Creates the vertex
+    Vertex vertex;
+    vertex.pos = pos;
+    vertex.normal = normal;
+    vertex.id = int2(min(indexA, indexB), max(indexA, indexB));
+
+    return vertex;
+}
+
+Triangle createTriangle(Vertex vA, Vertex vB, Vertex vC) {
+    Triangle tri;
+    tri.vA = vA;
+    tri.vB = vB;
+    tri.vC = vC;
+
+    return tri;
+}
+
+[numthreads(8, 8, 8)]
+void CSMain(int3 id : SV_DispatchThreadID)
+{
+    int numCubePerAxis = numPointsPerAxis - 1;
+
+    if (id.x >= numCubePerAxis || id.y >= numCubePerAxis || id.z >= numCubePerAxis) {
+        return;
+    }
+
+    // Finds corners of current cube
+    int3 cornerCoords[8];
+    cornerCoords[0] = id + int3(0, 0, 0);
+    cornerCoords[1] = id + int3(1, 0, 0);
+    cornerCoords[2] = id + int3(1, 0, 1);
+    cornerCoords[3] = id + int3(0, 0, 1);
+    cornerCoords[4] = id + int3(0, 1, 0);
+    cornerCoords[5] = id + int3(1, 1, 0);
+    cornerCoords[6] = id + int3(1, 1, 1);
+    cornerCoords[7] = id + int3(0, 1, 1);
+
+    int cubeConfiguration = 0;
+    for (int i = 0; i < 8; i++) {
+        if (smapleDensity(cornerCoords[i]) < isoLevel) {
+            cubeConfiguration |= (1 << i);
+        }
+    }
+
+    int edgeIndices[] = triangulation[cubeConfiguration];
+
+    for (i = 0; i < 16; i += 3) {
+        // No further vertices exist
+        if (edgeIndices[i] == -1) {
+            break;
+        }
+        else {
+            // Gets coords of points defining an edge
+            int edgeIndexA = edgeIndices[i];
+            int a0 = cornerIndexAFromEdge[edgeIndexA];
+            int a1 = cornerIndexBFromEdge[edgeIndexA];
+
+            int edgeIndexB = edgeIndices[i + 1];
+            int b0 = cornerIndexAFromEdge[edgeIndexB];
+            int b1 = cornerIndexBFromEdge[edgeIndexB];
+
+            int edgeIndexC = edgeIndices[i + 2];
+            int c0 = cornerIndexAFromEdge[edgeIndexC];
+            int c1 = cornerIndexBFromEdge[edgeIndexC];
+
+            // Calcuklates vertex positions
+            Vertex vA = createVertex(cornerCoords[a0], cornerCoords[a1]);
+            Vertex vB = createVertex(cornerCoords[b0], cornerCoords[b1]);
+            Vertex vC = createVertex(cornerCoords[c0], cornerCoords[c1]);
+
+            triangles.Append(createTriangle(vC, vB, vA));
+        }
+    }
+}

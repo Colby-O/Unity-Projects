@@ -1,0 +1,25 @@
+#pragma kernel CSMain
+
+RWTexture3D<float> planetMap;
+RWTexture3D<float> noiseMap;
+
+int textureSize;
+float radius;
+float noiseMultiplier;
+
+float getPlanetValue(float3 pos) {
+    float3 worldPos = (pos / (textureSize - 1.0f) - 0.5f) * radius * 2 * 2;
+    return length(worldPos) - radius;
+}
+
+[numthreads(8,8,8)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    float val = getPlanetValue(id);
+    float noise = noiseMap[id] * noiseMultiplier;
+
+    if (val <= 0 && false) {
+        val *= (noiseMap[id] > 0.35);
+    }
+    planetMap[id] = val + noise;
+}

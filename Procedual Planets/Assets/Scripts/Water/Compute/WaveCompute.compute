@@ -1,0 +1,75 @@
+#pragma kernel CSMain
+
+
+RWTexture2D<float4> pastWave;
+RWTexture2D<float4> currentWave;
+RWTexture2D<float4> nextWave;
+RWTexture2D<float4> obstaclesTex;
+
+int2 resolution;
+float3 effect;
+float elasticity;
+bool useReflectiveBoundaryCondition;
+
+//RWTexture3D<float> planetMap;
+//float radius;
+//float scale;
+
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	float nextWaveHeight;
+	float v = (0.5f - 1.0f) / (0.5f + 1.0f);
+
+	float n00 = currentWave[id.xy].x;
+	float n00Past = pastWave[id.xy].x;
+	float n10;
+	float n01;
+	float nm10;
+	float n0m1;
+
+	if (id.x == 0) {
+		nm10 = currentWave[uint2(resolution.x - 1, id.y)].x;
+		n10 = currentWave[id.xy + uint2(1, 0)].x;
+	}
+	else if (id.x == resolution.x - 1) {
+		nm10 = currentWave[id.xy - uint2(1, 0)].x;
+		n10 = currentWave[uint2(0, id.y)].x;
+	}
+	else {
+		nm10 = currentWave[id.xy - uint2(1, 0)].x;
+		n10 = currentWave[id.xy + uint2(1, 0)].x;
+	}
+
+	if (id.y == 0) {
+		n0m1 = currentWave[uint2(id.x, resolution.y - 1)].x;
+		n01 = currentWave[id.xy + uint2(0, 1)].x;
+	} else if (id.y == resolution.y - 1) {
+		n0m1 = currentWave[id.xy - uint2(0, 1)].x;
+		n01 = currentWave[uint2(id.x, 0)].x;
+	}
+	else {
+		n0m1 = currentWave[id.xy - uint2(0, 1)].x;
+		n01 = currentWave[id.xy + uint2(0, 1)].x;
+	}
+
+	nextWaveHeight = 2.0f * n00 - n00Past + 0.25 * (n0m1 + n01 + nm10 + n10 - 4.0f * n00);
+	nextWaveHeight *= elasticity;
+
+	if (id.x == floor(effect.x) && id.y == floor(effect.y)) {
+		nextWaveHeight = effect.z;
+	}
+
+	/*
+	if (obstaclesTex[id.xy].x == 1) {
+		nextWaveHeight = 0;
+	}
+
+	if (obstaclesTex[id.xy].y == 1) {
+		nextWaveHeight = -0.5;
+	}
+	*/
+
+	nextWave[id.xy] = float4(nextWaveHeight, nextWaveHeight, nextWaveHeight, 1);
+}

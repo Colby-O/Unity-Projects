@@ -1,0 +1,158 @@
+#pragma kernel CSMain
+
+RWTexture3D<float> Result;
+
+int textureSize;
+float lacunarity;
+float persistence;
+float noiseScale;
+float fBmFactor;
+float hybridMultifractalFactor;
+int octaves;
+const static int tableSize = 256;
+
+const static float3 gradients[12] = { float3(1,1,0),float3(-1,1,0),float3(1,-1,0),float3(-1,-1,0),
+ float3(1,0,1),float3(-1,0,1),float3(1,0,-1), float3(-1,0,-1),
+ float3(0,1,1),float3(0,-1,1), float3(0,1,-1), float3(0,-1,-1) };
+const static int P[256] = { 151,160,137,91,90,15,
+131,13,201,95,96,53,194,233,7,225,140,36,103,30,69,142,8,99,37,240,21,10,23,
+190, 6,148,247,120,234,75,0,26,197,62,94,252,219,203,117,35,11,32,57,177,33,
+88,237,149,56,87,174,20,125,136,171,168, 68,175,74,165,71,134,139,48,27,166,
+77,146,158,231,83,111,229,122,60,211,133,230,220,105,92,41,55,46,245,40,244,
+102,143,54, 65,25,63,161, 1,216,80,73,209,76,132,187,208, 89,18,169,200,196,
+135,130,116,188,159,86,164,100,109,198,173,186, 3,64,52,217,226,250,124,123,
+5,202,38,147,118,126,255,82,85,212,207,206,59,227,47,16,58,17,182,189,28,42,
+223,183,170,213,119,248,152, 2,44,154,163, 70,221,153,101,155,167, 43,172,9,
+129,22,39,253, 19,98,108,110,79,113,224,232,178,185, 112,104,218,246,97,228,
+251,34,242,193,238,210,144,12,191,179,162,241, 81,51,145,235,249,14,239,107,
+49,192,214, 31,181,199,106,157,184, 84,204,176,115,121,50,45,127, 4,150,254,
+138,236,205,93,222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180 };
+
+float fade(float t) {
+	return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+float lerp(float x, float y, float t) {
+	return x + t * (y - x);
+}
+
+uint hash(uint s)
+{
+	s ^= 2747636419u;
+	s *= 2654435769u;
+	s ^= s >> 16;
+	s *= 2654435769u;
+	s ^= s >> 16;
+	s *= 2654435769u;
+	return s;
+}
+
+float rand(uint seed)
+{
+	return float(hash(seed)) / 4294967295.0;
+}
+
+int randInt(uint seed)
+{
+	return int(int(hash(seed)) / 4294967295.0);
+}
+
+float eval(float3 pt) {
+	int x0 = (int)floor(pt[0]) & (tableSize - 1);
+	int y0 = (int)floor(pt[1]) & (tableSize - 1);
+	int z0 = (int)floor(pt[2]) & (tableSize - 1);
+
+	int x1 = (x0 + 1);
+	int y1 = (y0 + 1);
+	int z1 = (z0 + 1);
+
+	float pointX0 = pt[0] - floor(pt[0]);
+	float pointY0 = pt[1] - floor(pt[1]);
+	float pointZ0 = pt[2] - floor(pt[2]);
+
+	float pointX1 = pointX0 - 1.0f;
+	float pointY1 = pointY0 - 1.0f;
+	float pointZ1 = pointZ0 - 1.0f;
+
+	float3 V000 = float3(pointX0, pointY0, pointZ0);
+	float3 V100 = float3(pointX1, pointY0, pointZ0);
+	float3 V010 = float3(pointX0, pointY1, pointZ0);
+	float3 V001 = float3(pointX0, pointY0, pointZ1);
+	float3 V101 = float3(pointX1, pointY0, pointZ1);
+	float3 V110 = float3(pointX1, pointY1, pointZ0);
+	float3 V011 = float3(pointX0, pointY1, pointZ1);
+	float3 V111 = float3(pointX1, pointY1, pointZ1);
+
+	float3 g000 = gradients[P[P[P[x0] + y0] + z0] % 12];
+	float3 g100 = gradients[P[P[P[x1] + y0] + z0] % 12];
+	float3 g010 = gradients[P[P[P[x0] + y1] + z0] % 12];
+	float3 g001 = gradients[P[P[P[x0] + y0] + z1] % 12];
+	float3 g101 = gradients[P[P[P[x1] + y0] + z1] % 12];
+	float3 g110 = gradients[P[P[P[x1] + y1] + z0] % 12];
+	float3 g011 = gradients[P[P[P[x0] + y1] + z1] % 12];
+	float3 g111 = gradients[P[P[P[x1] + y1] + z1] % 12];
+
+	float dotX0Y0Z0 = dot(V000, g000);
+	float dotX1Y0Z0 = dot(V100, g100);
+	float dotX0Y1Z0 = dot(V010, g010);
+	float dotX0Y0Z1 = dot(V001, g001);
+	float dotX1Y0Z1 = dot(V101, g101);
+	float dotX1Y1Z0 = dot(V110, g110);
+	float dotX0Y1Z1 = dot(V011, g011);
+	float dotX1Y1Z1 = dot(V111, g111);
+
+	float a = lerp(dotX0Y0Z0, dotX1Y0Z0, fade(pointX0));
+	float b = lerp(dotX0Y1Z0, dotX1Y1Z0, fade(pointX0));
+	float c = lerp(dotX0Y0Z1, dotX1Y0Z1, fade(pointX0));
+	float d = lerp(dotX0Y1Z1, dotX1Y1Z1, fade(pointX0));
+
+	float e = lerp(a, b, fade(pointY0));
+	float f = lerp(c, d, fade(pointY0));
+
+	// Result is scale to the range [-1,1]
+	return lerp(e, f, fade(pointZ0));
+}
+
+float fBm(float3 pt) {
+	float val = 0;
+	float f = noiseScale / 100;
+	float a = 1;
+
+	for (int i = 0; i < octaves; ++i) {
+		val += eval(pt * f) * a;
+		a *= persistence;
+		f *= lacunarity;
+	}
+
+	return val;
+}
+
+float hybridMultifractal(float3 pt) {
+	float f = noiseScale / 100;
+	float a = 1;
+	float val = (1 - abs(eval(pt * f))) * a;
+	float weight = val;
+	a *= persistence;
+	f *= lacunarity;
+
+	for (int i = 1; i < octaves; ++i) {
+		if (weight > 1.0f) {
+			weight = 1.0f;
+		}
+		float signal = (1 - abs(eval(pt * f))) * a;
+		val += signal * weight;
+		weight *= signal;
+		pt *= lacunarity;
+	}
+
+	return (val - 2) / 2;
+}
+
+[numthreads(8, 8, 8)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+	float hybridMultifractalNoise = (hybridMultifractal(id) + 1.0f) / 2.0f;
+	float fBmNoise = (fBm(id) + 1.0f) / 2.0f;
+
+	Result[id] = (fBmFactor * fBmNoise + hybridMultifractalFactor * hybridMultifractalNoise) / (hybridMultifractalFactor + fBmFactor);
+}

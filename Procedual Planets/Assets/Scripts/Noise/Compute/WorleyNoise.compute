@@ -1,0 +1,93 @@
+#pragma kernel CSMain
+
+RWTexture3D<float> Result;
+
+uint _seed;
+int textureSize;
+int gridSize;
+float pointDensity;
+float fluffFactor;
+float smoothness;
+float noiseScale;
+float persistence;
+float lacunarity;
+int octaves;
+
+uint hash(uint s)
+{
+    s ^= 2747636419u;
+    s *= 2654435769u;
+    s ^= s >> 16;
+    s *= 2654435769u;
+    s ^= s >> 16;
+    s *= 2654435769u;
+    return s;
+}
+
+
+float rand(uint seed)
+{
+    return float(hash(seed)) / 4294967295.0;
+}
+
+float rand01(float3 pt)
+{
+    float j = 512.0 * frac(4096.0 * sin(dot(pt, float3(17.0, 59.4, 29.0))));
+    float3 r;
+    r.z = frac(j);
+    j *= .125;
+    r.x = frac(j);
+    j *= .125;
+    r.y = frac(j);
+    return r - 0.5;
+}
+
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
+    return lerp(a, b, h) - k * h * (1.0 - h);
+}
+
+float map(float value, float min1, float max1, float min2, float max2) {
+    return min2 + (value - min1) * (max2 - min2) / (max1 - min1);
+}
+
+float eval(float3 pt) {
+    uint seed = _seed;
+    //float minDist = pow(2, 32) - 1;
+    float dist = 1;
+
+    for (int i = -gridSize; i < gridSize; ++i) {
+        for (int j = -gridSize; j < gridSize; ++j) {
+            for (int k = -gridSize; k < gridSize; ++k) {
+
+                float3 cell = floor(pt) + float3(i, j, k);
+                float3 cellPt = cell + 0.5 + float(gridSize) * rand01(cell);
+                dist = smin(dist, distance(pt, cellPt), smoothness);
+            }
+        }
+    }
+    float density = dist;  
+    return density;
+}
+
+float fBm(float3 pt) {
+    float val = 0;
+    float f = noiseScale / 100;
+    float a = 1;
+
+    for (int i = 0; i < octaves; ++i) {
+        val += eval(pt * f) * a;
+        a *= persistence;
+        f *= lacunarity;
+    }
+
+    return val;
+}
+
+[numthreads(8,8,8)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    float density = fBm(id);
+    density = 1.0 - pow(pointDensity, fluffFactor) * pow(density, fluffFactor);
+    Result[id] = max(0, density);
+}
